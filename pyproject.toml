@@ -1,0 +1,22 @@
+[project]
+name = "project-mujoco-visualizer"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Leek-LYK", email = "842130113@qq.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "matplotlib>=3.11.1",
+    "mujoco>=3.12.0",
+    "numpy>=2.5.3",
+    "scipy>=1.18.1",
+]
+
+[project.scripts]
+project-mujoco-visualizer = "project_mujoco_visualizer:main"
+
+[build-system]
+requires = ["uv_build>=0.12.11,<0.13.0"]
+build-backend = "uv_build"

@@ -1,0 +1,55 @@
+# =========================
+# Python-generated files
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Python build artifacts
+build/
+dist/
+wheels/
+*.egg-info/
+
+# Test / lint / type-check caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# =========================
+# Virtual environments
+# =========================
+.venv/
+venv/
+env/
+
+# =========================
+# IDE / editor files
+# =========================
+.vscode/
+.idea/
+
+# =========================
+# OS-generated files
+# =========================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =========================
+# Runtime / temporary files
+# =========================
+*.log
+*.tmp
+*.temp
+
+# =========================
+# Motion data
+# Keep the data/ directory,
+# but ignore all actual data files inside it.
+# =========================
+data/*
+!data/.gitkeep
