@@ -46,6 +46,13 @@ class PlaybackController:
         return int(self._qpos.shape[0])
 
     @property
+    def sample_rate_hz(self) -> float:
+        """Source frame rate, independent of playback speed (median if irregular)."""
+        if self.frame_count > 1:
+            return 1.0 / float(np.median(np.diff(self._timestamps)))
+        return 1.0 / float(self._durations[0])
+
+    @property
     def current_frame(self) -> int:
         with self._lock:
             return self._frame_index

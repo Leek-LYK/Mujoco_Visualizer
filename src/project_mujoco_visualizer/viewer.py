@@ -99,6 +99,16 @@ def _print_status(controller: PlaybackController, *, newline: bool = False) -> N
         sys.stdout.flush()
 
 
+def _show_motion_rate(viewer: Any, mujoco: Any, controller: PlaybackController) -> None:
+    """Display the selected motion's source rate in the viewport."""
+    viewer.set_texts((
+        mujoco.mjtFontScale.mjFONTSCALE_150,
+        mujoco.mjtGridPos.mjGRID_TOPLEFT,
+        "Motion FPS",
+        f"{controller.sample_rate_hz:g}",
+    ))
+
+
 def _configure_initial_camera(mujoco: Any, model: Any, data: Any, viewer: Any) -> tuple[float, float, float] | None:
     """Start a tracking camera centered on the compiled model's ``base_link``."""
 
@@ -156,6 +166,7 @@ def run_viewer(
             data.qpos[:] = controller.current_qpos()
             mujoco.mj_forward(model, data)
             camera_target = _configure_initial_camera(mujoco, model, data, viewer)
+            _show_motion_rate(viewer, mujoco, controller)
             viewer.sync()
             if camera_target is not None:
                 print(
@@ -189,6 +200,7 @@ def run_viewer(
                         else:
                             switched = switched or replacement is not controller
                             controller = replacement
+                            _show_motion_rate(viewer, mujoco, controller)
                             print(f"\nMotion: {playlist.path}", flush=True)
                         last_time = time.perf_counter()
                     elif _handle_keycode(keycode, controller, glfw):
