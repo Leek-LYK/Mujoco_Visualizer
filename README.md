@@ -1,5 +1,16 @@
 # project_mujoco_visualizer
 
+支持 `.pkl` 动作字典（GMR/LAFAN）：`fps`、`root_pos (T,3)`、
+`root_rot (T,4)`、`dof_pos (T,J)`、`joint_names (J,)`。
+`root_rot` 按 `xyzw` 读取并转为 MuJoCo 的 `wxyz`，关节按名称映射。
+可选的 `link_body_list` 用作 `local_body_pos` 的身体名称列表。
+PKL 与 CSV/NPZ 一样支持上下键切换；仅加载可信来源的 PKL，
+因为 Python pickle 反序列化可执行代码。
+
+```powershell
+uv run python -m project_mujoco_visualizer --model robot_asset/roban_s22_handball/xml/scene.xml --motion ".\data\dance1_subject1.pkl"
+```
+
 一个使用官方 `mujoco` Python API 的 CSV/NPZ 机器人运动可视化工具。它不依赖大型 GUI 框架，使用 MuJoCo 自带的 passive viewer 显示模型。
 
 ## 运行

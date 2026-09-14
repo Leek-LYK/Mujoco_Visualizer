@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import csv
 import math
+import pickle
+from contextlib import contextmanager
+from collections.abc import Mapping
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -481,13 +484,13 @@ _OMINISOMA_ROBAN_S22_JOINT_NAMES = (
 
 
 def _npz_joint_names(
-    archive: np.lib.npyio.NpzFile,
+    archive: Mapping,
     *,
     path: Path,
     joint_count: int,
     allow_ominisoma_default: bool,
 ) -> tuple[str, ...]:
-    if "joint_names" in archive.files:
+    if "joint_names" in archive.keys():
         joint_names = _npz_string_tuple(archive["joint_names"], path=path, field="joint_names")
     elif allow_ominisoma_default and joint_count == len(_OMINISOMA_ROBAN_S22_JOINT_NAMES):
         # OminiSoma Roban S22 clips use this fixed articulation order but do
@@ -506,14 +509,14 @@ def _npz_joint_names(
 
 
 def _npz_array(
-    archive: np.lib.npyio.NpzFile,
+    archive: Mapping,
     key: str,
     *,
     path: Path,
     ndim: int,
     last_dimension: int | None = None,
 ) -> np.ndarray:
-    if key not in archive.files:
+    if key not in archive.keys():
         raise MotionFormatError(f"NPZ motion is missing required field {key!r}: {path}")
     array = np.asarray(archive[key], dtype=np.float64)
     if array.ndim != ndim:
@@ -544,7 +547,36 @@ def _npz_scalar(value: np.ndarray, *, path: Path, field: str) -> float:
         ) from exc
 
 
-def load_motion_npz(
+@contextmanager
+def _open_binary_motion(path: Path):
+    if path.suffix.lower() == ".pkl":
+        with path.open("rb") as stream:
+            archive = pickle.load(stream)
+        if not isinstance(archive, dict) or not all(isinstance(k, str) for k in archive):
+            raise MotionFormatError(f"PKL motion must contain a dictionary with string keys: {path}")
+        # GMR PKL uses link_body_list for the local_body_pos body order.
+        if "body_names" not in archive and "link_body_list" in archive:
+            archive = dict(archive, body_names=archive["link_body_list"])
+        yield archive
+    else:
+        with np.load(path, allow_pickle=False) as archive:
+            yield archive
+
+
+def load_motion_npz(path: str | Path, **kwargs) -> MotionData:
+    """Load a supported NPZ motion archive."""
+    return _load_motion_binary(path, **kwargs)
+
+
+def load_motion_pkl(path: str | Path, **kwargs) -> MotionData:
+    """Load a trusted GMR/LAFAN pickle dictionary (root_rot is xyzw)."""
+    try:
+        return _load_motion_binary(path, **kwargs)
+    except MotionFormatError as exc:
+        raise MotionFormatError(str(exc).replace("NPZ", "PKL")) from exc
+
+
+def _load_motion_binary(
     path: str | Path,
     *,
     sample_rate_hz: float | None = None,
@@ -559,86 +591,87 @@ def load_motion_npz(
     quaternions in MuJoCo's ``wxyz`` order and creates timestamps from ``fps``.
     """
 
-    npz_path = Path(path).expanduser().resolve()
-    if not npz_path.is_file():
-        raise MotionFormatError(f"Motion NPZ does not exist: {npz_path}")
+    motion_path = Path(path).expanduser().resolve()
+    format_name = motion_path.suffix[1:].upper()
+    if not motion_path.is_file():
+        raise MotionFormatError(f"Motion {format_name} does not exist: {motion_path}")
     if quat_order != "auto":
         raise MotionFormatError(
-            "NPZ root_rot has a fixed xyzw convention; do not pass --quat-order for NPZ input."
+            f"{format_name} root_rot has a fixed xyzw convention; do not pass --quat-order for {format_name} input."
         )
 
     field_names: tuple[str, ...] = ()
     try:
-        with np.load(npz_path, allow_pickle=False) as archive:
-            field_names = tuple(archive.files)
-            if "fps" not in archive.files:
-                raise MotionFormatError(f"NPZ motion is missing required field 'fps': {npz_path}")
-            fps = _npz_scalar(archive["fps"], path=npz_path, field="fps")
+        with _open_binary_motion(motion_path) as archive:
+            field_names = tuple(archive.keys())
+            if "fps" not in archive.keys():
+                raise MotionFormatError(f"{format_name} motion is missing required field 'fps': {motion_path}")
+            fps = _npz_scalar(archive["fps"], path=motion_path, field="fps")
             if not math.isfinite(fps) or fps <= 0:
-                raise MotionFormatError(f"NPZ fps must be positive and finite, got {fps!r}.")
+                raise MotionFormatError(f"{format_name} fps must be positive and finite, got {fps!r}.")
             if sample_rate_hz is not None and not math.isclose(
                 sample_rate_hz, fps, rel_tol=1e-6, abs_tol=1e-9
             ):
                 raise MotionFormatError(
-                    f"Explicit sample rate {sample_rate_hz:g} Hz disagrees with NPZ fps {fps:g} Hz."
+                    f"Explicit sample rate {sample_rate_hz:g} Hz disagrees with {format_name} fps {fps:g} Hz."
                 )
 
-            fields = set(archive.files)
+            fields = set(archive.keys())
             if {"root_pos", "root_rot", "dof_pos"}.issubset(fields):
-                root_position = _npz_array(archive, "root_pos", path=npz_path, ndim=2, last_dimension=3)
+                root_position = _npz_array(archive, "root_pos", path=motion_path, ndim=2, last_dimension=3)
                 root_rotation_xyzw = _npz_array(
-                    archive, "root_rot", path=npz_path, ndim=2, last_dimension=4
+                    archive, "root_rot", path=motion_path, ndim=2, last_dimension=4
                 )
                 root_quaternion = root_rotation_xyzw[:, [3, 0, 1, 2]]
-                joint_values = _npz_array(archive, "dof_pos", path=npz_path, ndim=2)
+                joint_values = _npz_array(archive, "dof_pos", path=motion_path, ndim=2)
                 joint_names = _npz_joint_names(
                     archive,
-                    path=npz_path,
+                    path=motion_path,
                     joint_count=joint_values.shape[1],
                     allow_ominisoma_default=False,
                 )
                 root_position_columns = ("root_pos[x]", "root_pos[y]", "root_pos[z]")
                 root_quaternion_columns = ("root_rot[x]", "root_rot[y]", "root_rot[z]", "root_rot[w]")
-                quaternion_input_order = "xyzw -> wxyz (explicit NPZ conversion)"
+                quaternion_input_order = f"xyzw -> wxyz (explicit {format_name} conversion)"
 
                 if "body_names" in fields:
-                    body_names = _npz_string_tuple(archive["body_names"], path=npz_path, field="body_names")
+                    body_names = _npz_string_tuple(archive["body_names"], path=motion_path, field="body_names")
                     if "local_body_pos" in fields:
                         local_body_pos = _npz_array(
-                            archive, "local_body_pos", path=npz_path, ndim=3, last_dimension=3
+                            archive, "local_body_pos", path=motion_path, ndim=3, last_dimension=3
                         )
                         if local_body_pos.shape[:2] != (root_position.shape[0], len(body_names)):
                             raise MotionFormatError(
-                                f"NPZ local_body_pos shape {local_body_pos.shape} does not match "
+                                f"{format_name} local_body_pos shape {local_body_pos.shape} does not match "
                                 f"frames/body_names ({root_position.shape[0]}, {len(body_names)})."
                             )
                     if "local_body_rot" in fields:
                         local_body_rot = _npz_array(
-                            archive, "local_body_rot", path=npz_path, ndim=3, last_dimension=4
+                            archive, "local_body_rot", path=motion_path, ndim=3, last_dimension=4
                         )
                         if local_body_rot.shape[:2] != (root_position.shape[0], len(body_names)):
                             raise MotionFormatError(
-                                f"NPZ local_body_rot shape {local_body_rot.shape} does not match "
+                                f"{format_name} local_body_rot shape {local_body_rot.shape} does not match "
                                 f"frames/body_names ({root_position.shape[0]}, {len(body_names)})."
                             )
             elif {"joint_pos", "body_pos_w", "body_quat_w"}.issubset(fields):
-                joint_values = _npz_array(archive, "joint_pos", path=npz_path, ndim=2)
-                body_position = _npz_array(archive, "body_pos_w", path=npz_path, ndim=3, last_dimension=3)
+                joint_values = _npz_array(archive, "joint_pos", path=motion_path, ndim=2)
+                body_position = _npz_array(archive, "body_pos_w", path=motion_path, ndim=3, last_dimension=3)
                 body_quaternion_wxyz = _npz_array(
-                    archive, "body_quat_w", path=npz_path, ndim=3, last_dimension=4
+                    archive, "body_quat_w", path=motion_path, ndim=3, last_dimension=4
                 )
                 if body_position.shape[1] == 0:
-                    raise MotionFormatError(f"NPZ body_pos_w contains no bodies: {npz_path}")
+                    raise MotionFormatError(f"{format_name} body_pos_w contains no bodies: {motion_path}")
                 if body_quaternion_wxyz.shape[:2] != body_position.shape[:2]:
                     raise MotionFormatError(
-                        f"NPZ body_pos_w and body_quat_w dimensions disagree: "
+                        f"{format_name} body_pos_w and body_quat_w dimensions disagree: "
                         f"{body_position.shape} vs {body_quaternion_wxyz.shape}."
                     )
                 root_position = body_position[:, 0, :].copy()
                 root_quaternion = body_quaternion_wxyz[:, 0, :].copy()
                 joint_names = _npz_joint_names(
                     archive,
-                    path=npz_path,
+                    path=motion_path,
                     joint_count=joint_values.shape[1],
                     allow_ominisoma_default=body_position.shape[1] == 28,
                 )
@@ -666,19 +699,19 @@ def load_motion_npz(
                     optional = np.asarray(archive[key])
                     if optional.ndim != expected_tail[0] or optional.shape[1:] != expected_tail[1:]:
                         raise MotionFormatError(
-                            f"NPZ field {key!r} has shape {optional.shape}; expected "
+                            f"{format_name} field {key!r} has shape {optional.shape}; expected "
                             f"({body_position.shape[0]}, {', '.join(map(str, expected_tail[1:]))})."
                         )
                     if optional.shape[0] != body_position.shape[0] or not np.isfinite(optional).all():
                         raise MotionFormatError(
-                            f"NPZ field {key!r} frame count or values are invalid: {npz_path}"
+                            f"{format_name} field {key!r} frame count or values are invalid: {motion_path}"
                         )
                 if "body_names" in fields:
-                    body_names = _npz_string_tuple(archive["body_names"], path=npz_path, field="body_names")
+                    body_names = _npz_string_tuple(archive["body_names"], path=motion_path, field="body_names")
                     if len(body_names) != body_position.shape[1]:
                         raise MotionFormatError(
-                            f"NPZ body_names has {len(body_names)} names but body arrays have "
-                            f"{body_position.shape[1]} bodies: {npz_path}"
+                            f"{format_name} body_names has {len(body_names)} names but body arrays have "
+                            f"{body_position.shape[1]} bodies: {motion_path}"
                         )
             else:
                 expected = (
@@ -686,33 +719,33 @@ def load_motion_npz(
                     "whole-body: joint_pos, body_pos_w, body_quat_w"
                 )
                 raise MotionFormatError(
-                    f"Unsupported NPZ schema in {npz_path}; expected {expected}. "
-                    f"Found fields: {', '.join(archive.files)}"
+                    f"Unsupported {format_name} schema in {motion_path}; expected {expected}. "
+                    f"Found fields: {', '.join(archive.keys())}"
                 )
 
             if root_position.shape[0] == 0:
-                raise MotionFormatError(f"NPZ motion contains zero frames: {npz_path}")
+                raise MotionFormatError(f"{format_name} motion contains zero frames: {motion_path}")
             if (
                 root_quaternion.shape[0] != root_position.shape[0]
                 or joint_values.shape[0] != root_position.shape[0]
             ):
                 raise MotionFormatError(
-                    f"NPZ frame dimensions disagree: root_pos={root_position.shape}, "
+                    f"{format_name} frame dimensions disagree: root_pos={root_position.shape}, "
                     f"root_quat={root_quaternion.shape}, joint_pos={joint_values.shape}."
                 )
     except MotionFormatError:
         raise
     except Exception as exc:
-        raise MotionFormatError(f"Could not read NPZ motion {npz_path}: {type(exc).__name__}: {exc}") from exc
+        raise MotionFormatError(f"Could not read {format_name} motion {motion_path}: {type(exc).__name__}: {exc}") from exc
 
     quaternion_norms = np.linalg.norm(root_quaternion, axis=1)
     if np.any(quaternion_norms <= 1e-12):
         bad = int(np.flatnonzero(quaternion_norms <= 1e-12)[0])
-        raise MotionFormatError(f"NPZ root quaternion at frame {bad} has near-zero norm: {npz_path}")
+        raise MotionFormatError(f"{format_name} root quaternion at frame {bad} has near-zero norm: {motion_path}")
     if np.max(np.abs(quaternion_norms - 1.0)) > quaternion_norm_tolerance:
         maximum = float(np.max(np.abs(quaternion_norms - 1.0)))
         raise MotionFormatError(
-            f"NPZ root quaternion norm differs from 1 by up to {maximum:.6g}; "
+            f"{format_name} root quaternion norm differs from 1 by up to {maximum:.6g}; "
             f"allowed tolerance is {quaternion_norm_tolerance:.6g}."
         )
 
@@ -720,7 +753,7 @@ def load_motion_npz(
     timestamps = np.arange(frame_count, dtype=np.float64) / fps
     frame_durations = np.full(frame_count, 1.0 / fps, dtype=np.float64)
     return MotionData(
-        path=npz_path,
+        path=motion_path,
         field_names=field_names,
         timestamps=timestamps,
         root_position=root_position,
@@ -731,11 +764,11 @@ def load_motion_npz(
         root_position_columns=root_position_columns,
         root_quaternion_columns=root_quaternion_columns,
         quaternion_input_order=quaternion_input_order,
-        delimiter="npz",
+        delimiter=format_name.lower(),
         sample_rate_hz=fps,
         frame_durations=frame_durations,
         uniform_timing=True,
-        timing_source="generated from NPZ fps field [s]",
+        timing_source=f"generated from {format_name} fps field [s]",
     )
 
 
@@ -746,7 +779,7 @@ def load_motion(
     quat_order: str = "auto",
     quaternion_norm_tolerance: float = 1e-3,
 ) -> MotionData:
-    """Dispatch to the CSV or NPZ motion loader based on file suffix."""
+    """Dispatch to the CSV, NPZ or PKL motion loader based on file suffix."""
 
     motion_path = Path(path)
     suffix = motion_path.suffix.lower()
@@ -757,11 +790,12 @@ def load_motion(
             quat_order=quat_order,
             quaternion_norm_tolerance=quaternion_norm_tolerance,
         )
-    if suffix == ".npz":
-        return load_motion_npz(
+    if suffix in {".npz", ".pkl"}:
+        loader = load_motion_pkl if suffix == ".pkl" else load_motion_npz
+        return loader(
             motion_path,
             sample_rate_hz=sample_rate_hz,
             quat_order=quat_order,
             quaternion_norm_tolerance=quaternion_norm_tolerance,
         )
-    raise MotionFormatError(f"Unsupported motion file format {suffix!r}; use .csv or .npz.")
+    raise MotionFormatError(f"Unsupported motion file format {suffix!r}; use .csv, .npz or .pkl.")

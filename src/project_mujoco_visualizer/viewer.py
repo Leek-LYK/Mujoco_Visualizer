@@ -23,7 +23,7 @@ class MotionPlaylist:
         self.path = path.resolve()
         self.paths = sorted(
             (p for p in self.path.parent.iterdir()
-             if p.is_file() and p.suffix.lower() in {".csv", ".npz"}),
+             if p.is_file() and p.suffix.lower() in {".csv", ".npz", ".pkl"}),
             key=lambda p: (p.name.casefold(), p.name),
         )
         self.loader = loader

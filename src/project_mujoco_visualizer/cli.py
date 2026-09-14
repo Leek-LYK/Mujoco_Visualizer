@@ -30,7 +30,9 @@ def _select_motion(path: str | None, data_dir: str | Path) -> Path:
     if not candidates:
         candidates = tuple(sorted(directory.glob("*.npz")))
     if not candidates:
-        raise VisualizerError(f"No .csv or .npz motion files found under {directory}")
+        candidates = tuple(sorted(directory.glob("*.pkl")))
+    if not candidates:
+        raise VisualizerError(f"No .csv, .npz or .pkl motion files found under {directory}")
     print(f"--motion not supplied; selected first motion file: {candidates[0]}")
     return candidates[0]
 
@@ -38,7 +40,7 @@ def _select_motion(path: str | None, data_dir: str | Path) -> Path:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="project_mujoco_visualizer",
-        description="Play named CSV or NPZ robot motion data in a MuJoCo MJCF model.",
+        description="Play named CSV, NPZ or PKL robot motion data in a MuJoCo MJCF model.",
     )
     parser.add_argument(
         "--model",
@@ -54,13 +56,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--motion",
         type=Path,
-        help="CSV or NPZ motion file; omitted means select the first supported file below --data-dir.",
+        help="CSV, NPZ or PKL motion file; omitted means select the first supported file below --data-dir.",
     )
     parser.add_argument(
         "--data-dir",
         type=Path,
         default=Path("data"),
-        help="Directory scanned for CSV/NPZ when --motion is omitted.",
+        help="Directory scanned for CSV/NPZ/PKL when --motion is omitted.",
     )
     parser.add_argument(
         "--sample-rate",
