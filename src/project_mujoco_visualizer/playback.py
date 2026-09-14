@@ -16,7 +16,7 @@ class PlaybackController:
         timestamps: np.ndarray,
         frame_durations: np.ndarray,
         *,
-        loop: bool = False,
+        loop: bool = True,
         speed: float = 1.0,
     ) -> None:
         sequence = np.asarray(qpos_sequence, dtype=np.float64)

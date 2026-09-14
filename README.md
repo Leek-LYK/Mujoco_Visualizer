@@ -1,6 +1,6 @@
 # project_mujoco_visualizer
 
-一个使用官方 `mujoco` Python API 的 CSV 机器人运动可视化工具。它不依赖大型 GUI 框架，使用 MuJoCo 自带的 passive viewer 显示模型。
+一个使用官方 `mujoco` Python API 的 CSV/NPZ 机器人运动可视化工具。它不依赖大型 GUI 框架，使用 MuJoCo 自带的 passive viewer 显示模型。
 
 ## 运行
 
@@ -25,6 +25,34 @@ uv run python -m project_mujoco_visualizer
 ```powershell
 uv run python -m project_mujoco_visualizer --analyze-only
 ```
+
+### LAFAN/Roban NPZ
+
+The retargeted LAFAN batch uses the GMR-style NPZ format:
+
+```text
+fps: scalar or one-element array (50 Hz)
+root_pos: (T, 3)
+root_rot: (T, 4), input order xyzw
+dof_pos: (T, 21)
+joint_names: (21,)
+body_names: (28,)
+```
+
+Play one NPZ file directly:
+
+```powershell
+uv run python -m project_mujoco_visualizer `
+  --model robot_asset/roban_s22_handball/xml/scene.xml `
+  --motion "data/LAFAN/lafan_s22_npz/walk1_subject1.npz"
+```
+
+The loader converts NPZ `root_rot` from `xyzw` to MuJoCo `wxyz`, generates timestamps from `fps`, and maps `dof_pos` by `joint_names`. The `local_body_pos` and `local_body_rot` arrays are validated when present but are not needed to construct MuJoCo qpos.
+
+Whole-body-tracking NPZ files are also accepted when they contain `joint_pos`,
+`body_pos_w`, and `body_quat_w`. The root is read from body index `0`, and
+`body_quat_w` is interpreted as `wxyz`. Roban S22 OminiSoma files without a
+`joint_names` field use the canonical 21-joint order for this asset.
 
 如果 CSV 没有时间列，必须显式提供采样率，例如
 `--sample-rate 25`。编号四元数列（`root_quat_0..3`）必须显式指定
@@ -71,13 +99,20 @@ leg_l6_joint_dof,  leg_r6_joint_dof
 | 按键 | 操作 |
 |---|---|
 | `Space` | 播放 / 暂停 |
+| `Up` / `Down` | 上一个 / 下一个动作文件 |
 | `Left` / `Right` | 后退 / 前进一帧，并暂停 |
 | `+` / `-` | 播放速度乘以 2 / 除以 2，范围 1/16x 到 16x |
 | `L` | 循环播放开关 |
 | `R` | 回到第 1 帧 |
+| `F10` | 安全退出 viewer |
 
 终端状态行显示当前帧、总帧数、CSV 时间、播放状态、倍速和循环状态。
 播放时间使用 CSV 时间戳的实际帧间隔；若间隔不均匀，会按每一帧的间隔推进。
+启动时默认开启循环播放；使用 `L` 可切换，命令行可用 `--no-loop` 显式关闭默认循环。
+
+viewer 启动时会将相机设置为 tracking 模式并锁定 `base_link`，使用适度距离和俯视角；终端会打印实际使用的相机目标位置。
+
+MuJoCo 原生 `Ctrl+Q` 也可以退出。终端中按 `Ctrl+C` 时程序会捕获中断并正常关闭 viewer，不再打印 traceback。
 
 ## 开发和测试
 
@@ -88,3 +123,5 @@ uv run python -m unittest discover -s tests -v
 测试覆盖 CSV 读取与采样率识别、重复/缺失字段错误、基于 joint name 的映射和自由根 qpos 构造。原始 `data/*.csv` 与 `robot_asset` 文件不会被程序改写。
 
 如果本机的 uv 缓存目录权限异常，可临时使用 `uv run --no-cache ...`；这只绕过 uv 缓存，不改变项目环境或输入文件。
+
+上下方向键在当前 `--motion` 文件所在目录内切换动作（省略 `--motion` 时使用自动选中文件的目录）。启动时扫描同层 CSV/NPZ 文件，按文件名排序（忽略大小写），首尾循环，不递归子目录。切换从第一帧开始，保留播放/暂停、倍速和循环设置；终端显示当前文件路径。加载失败会显示错误并保留当前动作。

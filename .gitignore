@@ -45,6 +45,8 @@ desktop.ini
 *.log
 *.tmp
 *.temp
+# MuJoCo runtime log
+MUJOCO_LOG.TXT 
 
 # =========================
 # Motion data

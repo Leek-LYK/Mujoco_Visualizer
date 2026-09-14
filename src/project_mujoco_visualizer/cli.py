@@ -10,7 +10,7 @@ from typing import Sequence
 from .errors import VisualizerError
 from .joint_mapping import build_qpos_sequence, create_joint_mapping, mapping_report_lines
 from .model_loader import load_model
-from .motion_loader import load_motion_csv
+from .motion_loader import load_motion
 from .playback import PlaybackController
 from .viewer import run_viewer
 
@@ -23,20 +23,22 @@ def _select_motion(path: str | None, data_dir: str | Path) -> Path:
     if path is not None:
         requested = Path(path).expanduser().resolve()
         if not requested.is_file():
-            raise VisualizerError(f"Motion CSV does not exist: {requested}")
+            raise VisualizerError(f"Motion file does not exist: {requested}")
         return requested
     directory = Path(data_dir).expanduser().resolve()
     candidates = tuple(sorted(directory.glob("*.csv")))
     if not candidates:
-        raise VisualizerError(f"No .csv motion files found under {directory}")
-    print(f"--motion not supplied; selected first CSV: {candidates[0]}")
+        candidates = tuple(sorted(directory.glob("*.npz")))
+    if not candidates:
+        raise VisualizerError(f"No .csv or .npz motion files found under {directory}")
+    print(f"--motion not supplied; selected first motion file: {candidates[0]}")
     return candidates[0]
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="project_mujoco_visualizer",
-        description="Play named CSV robot motion data in a MuJoCo MJCF model.",
+        description="Play named CSV or NPZ robot motion data in a MuJoCo MJCF model.",
     )
     parser.add_argument(
         "--model",
@@ -52,13 +54,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--motion",
         type=Path,
-        help="CSV motion file; omitted means select the first CSV below --data-dir.",
+        help="CSV or NPZ motion file; omitted means select the first supported file below --data-dir.",
     )
     parser.add_argument(
         "--data-dir",
         type=Path,
         default=Path("data"),
-        help="Directory scanned when --motion is omitted.",
+        help="Directory scanned for CSV/NPZ when --motion is omitted.",
     )
     parser.add_argument(
         "--sample-rate",
@@ -72,7 +74,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Order for generic root_quat_0..3 columns; named w/x/y/z fields are semantic.",
     )
     parser.add_argument("--speed", type=float, default=1.0, help="Initial playback speed multiplier.")
-    parser.add_argument("--loop", action="store_true", help="Start with loop playback enabled.")
+    parser.add_argument(
+        "--loop",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Start with loop playback enabled (default: on; use --no-loop to disable).",
+    )
     parser.add_argument(
         "--analyze-only",
         action="store_true",
@@ -86,12 +93,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         motion_path = _select_motion(str(args.motion) if args.motion else None, args.data_dir)
-        motion = load_motion_csv(
+        motion = load_motion(
             motion_path,
             sample_rate_hz=args.sample_rate,
             quat_order=args.quat_order,
         )
-        print("CSV analysis:")
+        print("Motion analysis:")
         print("\n".join(motion.report_lines()))
 
         model = load_model(args.model, asset_dir=args.asset_dir)
@@ -119,7 +126,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             loop=args.loop,
             speed=args.speed,
         )
-        run_viewer(model.model, motion, controller)
+        def load_playback(path: Path) -> PlaybackController:
+            next_motion = load_motion(
+                path, sample_rate_hz=args.sample_rate, quat_order=args.quat_order,
+            )
+            next_mapping = create_joint_mapping(model, next_motion)
+            next_qpos = build_qpos_sequence(model, next_motion, next_mapping)
+            return PlaybackController(
+                next_qpos, next_motion.timestamps, next_motion.frame_durations,
+            )
+
+        run_viewer(model.model, motion, controller, motion_loader=load_playback)
     except VisualizerError as exc:
         parser.error(str(exc))
     return 0

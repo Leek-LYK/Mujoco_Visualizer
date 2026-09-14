@@ -15,7 +15,7 @@ from .motion_loader import MotionData
 @dataclass(frozen=True)
 class JointBinding:
     joint_name: str
-    csv_column: str
+    input_field: str
     csv_index: int
     qpos_adr: int
     joint_type: str
@@ -83,7 +83,7 @@ def create_joint_mapping(model: ModelDescription, motion: MotionData) -> JointMa
     bindings = tuple(
         JointBinding(
             joint_name=joint.name,
-            csv_column=_csv_column_for_joint(motion, joint.name),
+            input_field=_input_field_for_joint(motion, joint.name),
             csv_index=csv_by_name[joint.name],
             qpos_adr=joint.qpos_adr,
             joint_type=joint.type_name,
@@ -98,13 +98,12 @@ def create_joint_mapping(model: ModelDescription, motion: MotionData) -> JointMa
     )
 
 
-def _csv_column_for_joint(motion: MotionData, joint_name: str) -> str:
+def _input_field_for_joint(motion: MotionData, joint_name: str) -> str:
     for index, name in enumerate(motion.joint_names):
         if name == joint_name:
-            # The loader retains the original field order but not the candidate
-            # column names as a separate map.  Actual CSV columns use the same
-            # semantic name with a recognized suffix; report that name when
-            # possible and fall back to the semantic name for programmatic data.
+            # CSV fields use the semantic name with a recognized suffix. NPZ
+            # fields carry the names in the joint_names array, so fall back to
+            # the semantic name when no per-joint field name exists.
             for column in motion.field_names:
                 if column == joint_name or column.lower().startswith(joint_name.lower() + "_"):
                     return column
@@ -170,7 +169,7 @@ def mapping_report_lines(model: ModelDescription, motion: MotionData, mapping: J
     ]
     for binding in mapping.bindings:
         lines.append(
-            f"    {binding.joint_name}: CSV {binding.csv_column!r} "
+            f"    {binding.joint_name}: input field {binding.input_field!r} "
             f"-> qpos[{binding.qpos_adr}] ({binding.joint_type})"
         )
     if model.candidate_errors:

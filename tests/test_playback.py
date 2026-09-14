@@ -34,6 +34,16 @@ class PlaybackTests(unittest.TestCase):
         self.assertEqual(controller.current_frame, 0)
         self.assertTrue(controller.loop)
 
+    def test_loop_is_enabled_by_default(self) -> None:
+        qpos = np.arange(4, dtype=float).reshape(4, 1)
+        timestamps = np.asarray([0.0, 0.1, 0.2, 0.3])
+        durations = np.full(4, 0.1)
+        controller = PlaybackController(qpos, timestamps, durations)
+        self.assertTrue(controller.loop)
+        self.assertTrue(controller.advance(0.4))
+        self.assertEqual(controller.current_frame, 0)
+        self.assertTrue(controller.playing)
+
 
 if __name__ == "__main__":
     unittest.main()
