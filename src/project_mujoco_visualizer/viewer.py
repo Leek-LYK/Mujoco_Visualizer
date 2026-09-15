@@ -99,14 +99,18 @@ def _print_status(controller: PlaybackController, *, newline: bool = False) -> N
         sys.stdout.flush()
 
 
-def _show_motion_rate(viewer: Any, mujoco: Any, controller: PlaybackController) -> None:
-    """Display the selected motion's source rate in the viewport."""
-    viewer.set_texts((
-        mujoco.mjtFontScale.mjFONTSCALE_150,
-        mujoco.mjtGridPos.mjGRID_TOPLEFT,
-        "Motion FPS",
-        f"{controller.sample_rate_hz:g}",
-    ))
+def _show_motion_status(
+    viewer: Any, mujoco: Any, controller: PlaybackController, path: Path,
+) -> None:
+    """Display source timing, frame progress, speed and selected filename."""
+    font = mujoco.mjtFontScale.mjFONTSCALE_150
+    viewer.set_texts([
+        (font, mujoco.mjtGridPos.mjGRID_TOPLEFT,
+         "Motion FPS\nFrame",
+         f"{controller.sample_rate_hz:g}\n{controller.current_frame + 1} / {controller.frame_count}"),
+        (font, mujoco.mjtGridPos.mjGRID_TOPRIGHT,
+         "Speed\nFile", f"{controller.speed:g}x\n{path.name}"),
+    ])
 
 
 def _configure_initial_camera(mujoco: Any, model: Any, data: Any, viewer: Any) -> tuple[float, float, float] | None:
@@ -166,7 +170,8 @@ def run_viewer(
             data.qpos[:] = controller.current_qpos()
             mujoco.mj_forward(model, data)
             camera_target = _configure_initial_camera(mujoco, model, data, viewer)
-            _show_motion_rate(viewer, mujoco, controller)
+            _show_motion_status(viewer, mujoco, controller, motion.path)
+            overlay_state = (controller, controller.current_frame, controller.speed)
             viewer.sync()
             if camera_target is not None:
                 print(
@@ -200,7 +205,6 @@ def run_viewer(
                         else:
                             switched = switched or replacement is not controller
                             controller = replacement
-                            _show_motion_rate(viewer, mujoco, controller)
                             print(f"\nMotion: {playlist.path}", flush=True)
                         last_time = time.perf_counter()
                     elif _handle_keycode(keycode, controller, glfw):
@@ -212,6 +216,12 @@ def run_viewer(
                 if switched or changed or not controller.playing:
                     data.qpos[:] = controller.current_qpos()
                     mujoco.mj_forward(model, data)
+                next_overlay_state = (controller, controller.current_frame, controller.speed)
+                if next_overlay_state != overlay_state:
+                    _show_motion_status(
+                        viewer, mujoco, controller, playlist.path if playlist else motion.path,
+                    )
+                    overlay_state = next_overlay_state
                 viewer.sync()
                 _print_status(controller)
                 time.sleep(0.001)
