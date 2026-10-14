@@ -9,6 +9,7 @@ performed by :mod:`joint_mapping`.
 from __future__ import annotations
 
 import csv
+import io
 import math
 import pickle
 from contextlib import contextmanager
@@ -431,7 +432,7 @@ def load_motion_csv(
 
 
 def _npz_string_tuple(value: np.ndarray, *, path: Path, field: str) -> tuple[str, ...]:
-    """Decode a one-dimensional NPZ string array without accepting objects."""
+    """Validate a one-dimensional array containing only string names."""
 
     array = np.asarray(value)
     if array.ndim != 1:
@@ -456,6 +457,56 @@ def _npz_string_tuple(value: np.ndarray, *, path: Path, field: str) -> tuple[str
             raise MotionFormatError(f"NPZ field {field!r} contains an empty name at index {index}.")
         names.append(name)
     return tuple(names)
+
+
+class _StringArrayUnpickler(pickle.Unpickler):
+    """Read legacy NumPy object names without enabling arbitrary pickle globals."""
+
+    def find_class(self, module: str, name: str):
+        if module == "numpy" and name in {"ndarray", "dtype"}:
+            return getattr(np, name)
+        if module in {"numpy.core.multiarray", "numpy._core.multiarray"} and name == "_reconstruct":
+            from numpy._core.multiarray import _reconstruct
+
+            return _reconstruct
+        raise pickle.UnpicklingError(f"Unsupported global in NPZ string array: {module}.{name}")
+
+
+def _npz_qpos_joint_names(archive: Mapping, *, path: Path, joint_count: int) -> tuple[str, ...]:
+    field = "robot_joint_names"
+    if field not in archive.keys():
+        raise MotionFormatError(f"NPZ qpos motion is missing required field {field!r}: {path}")
+    try:
+        value = archive[field]
+    except ValueError as exc:
+        # UMR stores these strings as an object array. Keep allow_pickle=False
+        # for the archive and read only this member with restricted globals.
+        if not isinstance(archive, np.lib.npyio.NpzFile) or "Object arrays cannot be loaded" not in str(exc):
+            raise
+        with archive.zip.open(f"{field}.npy") as member:
+            stream = io.BytesIO(member.read())
+        version = np.lib.format.read_magic(stream)
+        if version == (1, 0):
+            shape, _, dtype = np.lib.format.read_array_header_1_0(stream)
+        elif version == (2, 0):
+            shape, _, dtype = np.lib.format.read_array_header_2_0(stream)
+        else:
+            raise MotionFormatError(f"Unsupported object string NPY version {version}: {path}")
+        if shape != (joint_count,) or dtype != np.dtype(object):
+            raise MotionFormatError(
+                f"NPZ {field} object array must have shape ({joint_count},), got {shape}: {path}"
+            )
+        value = _StringArrayUnpickler(stream).load()
+        if not isinstance(value, np.ndarray) or value.shape != shape or value.dtype != dtype:
+            raise MotionFormatError(f"NPZ {field} payload disagrees with its NPY header: {path}")
+    names = _npz_string_tuple(value, path=path, field=field)
+    if len(names) != joint_count:
+        raise MotionFormatError(
+            f"NPZ {field} has {len(names)} names but qpos has {joint_count} joint columns: {path}"
+        )
+    if len(set(names)) != len(names):
+        raise MotionFormatError(f"NPZ {field} contains duplicates: {path}")
+    return names
 
 
 _OMINISOMA_ROBAN_S22_JOINT_NAMES = (
@@ -583,11 +634,12 @@ def _load_motion_binary(
     quat_order: str = "auto",
     quaternion_norm_tolerance: float = 1e-3,
 ) -> MotionData:
-    """Load supported retargeted and whole-body-tracking NPZ formats.
+    """Load supported retargeted, whole-body-tracking and MuJoCo qpos formats.
 
     GMR/LAFAN files store ``root_rot`` as ``xyzw``.  Whole-body-tracking files
     store the root at body index zero in ``body_pos_w``/``body_quat_w`` and use
-    ``wxyz`` quaternions.  The returned :class:`MotionData` always stores root
+    ``wxyz`` quaternions. UMR qpos stores root xyz, root wxyz and scalar joints
+    named by ``robot_joint_names``. The returned :class:`MotionData` stores root
     quaternions in MuJoCo's ``wxyz`` order and creates timestamps from ``fps``.
     """
 
@@ -597,7 +649,7 @@ def _load_motion_binary(
         raise MotionFormatError(f"Motion {format_name} does not exist: {motion_path}")
     if quat_order != "auto":
         raise MotionFormatError(
-            f"{format_name} root_rot has a fixed xyzw convention; do not pass --quat-order for {format_name} input."
+            f"{format_name} quaternion order is fixed by its schema; do not pass --quat-order for {format_name} input."
         )
 
     field_names: tuple[str, ...] = ()
@@ -713,10 +765,27 @@ def _load_motion_binary(
                             f"{format_name} body_names has {len(body_names)} names but body arrays have "
                             f"{body_position.shape[1]} bodies: {motion_path}"
                         )
+            elif "qpos" in fields:
+                qpos = _npz_array(archive, "qpos", path=motion_path, ndim=2)
+                if qpos.shape[1] < 7:
+                    raise MotionFormatError(
+                        f"{format_name} qpos must contain root xyz + wxyz (7 columns) "
+                        f"followed by scalar joints, got {qpos.shape}: {motion_path}"
+                    )
+                joint_names = _npz_qpos_joint_names(
+                    archive, path=motion_path, joint_count=qpos.shape[1] - 7
+                )
+                root_position = qpos[:, :3].copy()
+                root_quaternion = qpos[:, 3:7].copy()
+                joint_values = qpos[:, 7:].copy()
+                root_position_columns = ("qpos[0]", "qpos[1]", "qpos[2]")
+                root_quaternion_columns = ("qpos[3]", "qpos[4]", "qpos[5]", "qpos[6]")
+                quaternion_input_order = "wxyz (MuJoCo qpos root)"
             else:
                 expected = (
                     "GMR/LAFAN: root_pos, root_rot, dof_pos, joint_names; or "
-                    "whole-body: joint_pos, body_pos_w, body_quat_w"
+                    "whole-body: joint_pos, body_pos_w, body_quat_w; or "
+                    "MuJoCo/UMR: qpos, robot_joint_names"
                 )
                 raise MotionFormatError(
                     f"Unsupported {format_name} schema in {motion_path}; expected {expected}. "

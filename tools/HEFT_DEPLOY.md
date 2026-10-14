@@ -4,16 +4,16 @@
 
 ```powershell
 # 单文件，默认写入源目录的 deploy 子目录
-.\.venv\Scripts\python.exe tools\convert_heft_deploy.py "data\大脑生成\roban_key_out\001_a person crosses arms and stands still.csv"
+.\.venv\Scripts\python.exe tools\convert_heft_deploy.py "data\roban\大脑生成\roban_key_out\001_a person crosses arms and stands still.csv"
 
 # 批量转换同层 CSV；失败文件会报错，继续处理其他文件，最终返回非零退出码
-.\.venv\Scripts\python.exe tools\convert_heft_deploy.py "data\大脑生成\roban_key_out" --output-dir "data\heft_deploy"
+.\.venv\Scripts\python.exe tools\convert_heft_deploy.py "data\roban\大脑生成\roban_key_out" --output-dir "data\roban\heft_deploy"
 
 # 递归转换，保留相对目录结构
-.\.venv\Scripts\python.exe tools\convert_heft_deploy.py "data\大脑生成" --recursive --output-dir "data\heft_deploy"
+.\.venv\Scripts\python.exe tools\convert_heft_deploy.py "data\roban\大脑生成" --recursive --output-dir "data\roban\heft_deploy"
 
 # 对照真实 HEFT 示例检查表头及分隔符
-.\.venv\Scripts\python.exe tools\convert_heft_deploy.py "input.csv" --output "output_deploy.csv" --reference "D:\PKU-WHAI\周计划与总结\2026-9-14\main_220728_walk_forward_stop_002__A044_deploy.csv"
+.\.venv\Scripts\python.exe tools\convert_heft_deploy.py "data\roban\大脑生成\roban_key_out\001_a person crosses arms and stands still.csv" --output "data\roban\heft_deploy\example_deploy.csv" --reference "tests\fixtures\heft_deploy_reference.csv"
 
 # 不依赖外部数据集的转换测试
 .\.venv\Scripts\python.exe -m unittest discover -s tests -p test_heft_deploy.py

@@ -1,6 +1,6 @@
 """Add zero-pose quintic transitions before and after Roban motion CSVs.
 
-Run with no arguments to process data/roban_out/roban_out into its smoothed
+Run with no arguments to process data/roban/大脑生成/roban_out/roban_out into its smoothed
 subdirectory. Original motion values are preserved; timestamps are shifted.
 Root position/orientation are held at the respective endpoint during padding.
 The transition has zero endpoint velocity/acceleration; the untouched motion
@@ -16,7 +16,7 @@ import statistics
 from pathlib import Path
 
 
-DEFAULT_INPUT = Path(__file__).resolve().parents[1] / "data/roban_out/roban_out"
+DEFAULT_INPUT = Path(__file__).resolve().parents[1] / "data/roban/大脑生成/roban_out/roban_out"
 
 
 def smooth_csv(source: Path, output: Path, intro: float = 2.0,

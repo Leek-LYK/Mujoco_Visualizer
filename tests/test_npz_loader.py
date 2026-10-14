@@ -4,10 +4,13 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
 from project_mujoco_visualizer.errors import MotionFormatError
+from project_mujoco_visualizer.joint_mapping import build_qpos_sequence, create_joint_mapping
+from project_mujoco_visualizer.model_loader import JointInfo, ModelDescription
 from project_mujoco_visualizer.motion_loader import load_motion, load_motion_npz
 
 
@@ -99,6 +102,96 @@ class NpzLoaderTests(unittest.TestCase):
         path = self._write_npz(include_duplicate=True)
         with self.assertRaisesRegex(MotionFormatError, "contains duplicates"):
             load_motion_npz(path)
+
+
+class _UnexpectedPickleGlobal:
+    def __reduce__(self):
+        return eval, ("1 / 0",)
+
+
+class QposNpzLoaderTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.path = Path(self.directory.name) / "umr.npz"
+        self.qpos = np.asarray(
+            [[1, 2, 3, 0.8, 0, 0, 0.6, 20, 10], [4, 5, 6, 1, 0, 0, 0, 21, 11]],
+            dtype=np.float32,
+        )
+        self.payload = dict(
+            qpos=self.qpos,
+            fps=np.asarray([30], dtype=np.float32),
+            robot_joint_names=np.asarray(["joint_b", "joint_a"], dtype=object),
+            robot_xml=np.asarray("/original/machine/unavailable.xml"),
+        )
+
+    def write(self, **overrides) -> Path:
+        np.savez_compressed(self.path, **dict(self.payload, **overrides))
+        return self.path
+
+    def test_loads_umr_object_names_and_preserves_wxyz_and_fps(self) -> None:
+        motion = load_motion(self.write())
+        self.assertEqual(motion.joint_names, ("joint_b", "joint_a"))
+        self.assertEqual(motion.quaternion_input_order, "wxyz (MuJoCo qpos root)")
+        np.testing.assert_array_equal(motion.root_position, self.qpos[:, :3])
+        np.testing.assert_array_equal(motion.root_quaternion, self.qpos[:, 3:7])
+        np.testing.assert_array_equal(motion.joint_values, self.qpos[:, 7:])
+        np.testing.assert_allclose(motion.timestamps, [0, 1 / 30])
+        np.testing.assert_allclose(motion.frame_durations, [1 / 30, 1 / 30])
+
+    def test_maps_qpos_joint_columns_by_name(self) -> None:
+        motion = load_motion(self.write())
+        model = ModelDescription(
+            path=self.path,
+            model=SimpleNamespace(nq=9, qpos0=np.zeros(9)),
+            root_joint=JointInfo(0, "root_free", "free", 0, 7, 0),
+            joints=(JointInfo(1, "joint_a", "hinge", 7, 1, 6),
+                    JointInfo(2, "joint_b", "hinge", 8, 1, 7)),
+        )
+        sequence = build_qpos_sequence(model, motion, create_joint_mapping(model, motion))
+        np.testing.assert_array_equal(sequence[:, :7], self.qpos[:, :7])
+        np.testing.assert_array_equal(sequence[:, 7:], self.qpos[:, [8, 7]])
+
+    def test_accepts_unicode_and_bytes_names(self) -> None:
+        for dtype in (str, bytes):
+            with self.subTest(dtype=dtype):
+                motion = load_motion(self.write(robot_joint_names=np.asarray(["joint_b", "joint_a"], dtype=dtype)))
+                self.assertEqual(motion.joint_names, ("joint_b", "joint_a"))
+
+    def test_rejects_missing_names(self) -> None:
+        np.savez(self.path, qpos=self.qpos, fps=30)
+        with self.assertRaisesRegex(MotionFormatError, "missing required field 'robot_joint_names'"):
+            load_motion(self.path)
+
+    def test_rejects_invalid_data(self) -> None:
+        for overrides, message in (
+            (dict(qpos=np.zeros(9)), "must be 2D"),
+            (dict(qpos=np.zeros((2, 6))), "7 columns"),
+            (dict(qpos=np.empty((0, 9))), "zero frames"),
+            (dict(qpos=np.full((2, 9), np.nan)), "non-finite"),
+            (dict(qpos=np.zeros((2, 9))), "near-zero norm"),
+            (dict(qpos=self.qpos * 2), "norm differs"),
+            (dict(robot_joint_names=np.asarray(["a"])), "has 1 names"),
+            (dict(robot_joint_names=np.asarray(["a"], dtype=object)), "must have shape"),
+            (dict(robot_joint_names=np.asarray(["a", "a"], dtype=object)), "duplicates"),
+            (dict(robot_joint_names=np.asarray([123, None], dtype=object)), "must be a string"),
+            (dict(fps=0), "positive and finite"),
+        ):
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(MotionFormatError, message):
+                    load_motion(self.write(**overrides))
+
+    def test_rejects_arbitrary_pickle_globals_in_object_names(self) -> None:
+        path = self.write(robot_joint_names=np.asarray([_UnexpectedPickleGlobal(), "joint_a"], dtype=object))
+        with self.assertRaisesRegex(MotionFormatError, "Unsupported global.*builtins.eval"):
+            load_motion(path)
+
+    def test_rejects_conflicting_rate_and_quaternion_override(self) -> None:
+        path = self.write()
+        with self.assertRaisesRegex(MotionFormatError, "disagrees with NPZ fps"):
+            load_motion(path, sample_rate_hz=50)
+        with self.assertRaisesRegex(MotionFormatError, "fixed by its schema"):
+            load_motion(path, quat_order="xyzw")
 
 
 if __name__ == "__main__":

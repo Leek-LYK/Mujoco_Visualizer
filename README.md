@@ -8,10 +8,34 @@ PKL 与 CSV/NPZ 一样支持上下键切换；仅加载可信来源的 PKL，
 因为 Python pickle 反序列化可执行代码。
 
 ```powershell
-uv run python -m project_mujoco_visualizer --model robot_asset/roban_s22_handball/xml/scene.xml --motion ".\data\dance1_subject1.pkl"
+uv run python -m project_mujoco_visualizer --model robot_asset/roban_s22_handball/xml/scene.xml --motion "data/roban/dance1_subject1.pkl"
 ```
 
-一个使用官方 `mujoco` Python API 的 CSV/NPZ 机器人运动可视化工具。它不依赖大型 GUI 框架，使用 MuJoCo 自带的 passive viewer 显示模型。
+一个使用官方 `mujoco` Python API 的 CSV/NPZ/PKL 机器人运动可视化工具。它不依赖大型 GUI 框架，使用 MuJoCo 自带的 passive viewer 显示模型。
+
+## 数据目录
+
+动作数据按机型存放在 `data/<机型>/` 下。当前 Roban 数据统一位于
+`data/roban/`（本机为 `E:\leek\project\project_mujoco_visualizer\data\roban`）：
+
+```text
+data/
+└── roban/
+    ├── dance1_subject1.csv
+    ├── dance1_subject1.npz
+    ├── dance1_subject1.pkl
+    ├── LAFAN/
+    │   ├── lafan_s22_csv/
+    │   └── lafan_s22_npz/
+    ├── UMR/
+    ├── motions/
+    └── 大脑生成/
+```
+
+后续其他机型使用独立的 `data/<机型>/` 目录，并通过 `--model` 指定匹配的
+模型、`--motion` 指定动作文件，或通过 `--data-dir` 指定动作目录。
+当前默认模型和数据目录仍对应 Roban，尚不自动根据目录名切换模型。
+数据文件被 Git 忽略；下面的示例需要本地已有对应数据。
 
 ## 运行
 
@@ -20,16 +44,22 @@ uv run python -m project_mujoco_visualizer --model robot_asset/roban_s22_handbal
 ```powershell
 uv run python -m project_mujoco_visualizer `
   --model robot_asset/roban_s22_handball/xml/scene.xml `
-  --motion "data/666_Dance.csv"
+  --motion "data/roban/LAFAN/lafan_s22_csv/aiming1_subject1_roban_s22.csv"
 ```
 
 也可以省略 `--model` 和 `--motion`。程序会在默认的
 `robot_asset/roban_s22_handball` 下自动检查 XML/MJCF，优先选择
-`scene.xml` 这类包含机器人模型的场景入口，并从 `data` 中选择第一个 CSV：
+`scene.xml` 这类包含机器人模型的场景入口，并从 `data/roban` 同层按文件名
+选择第一个 NPZ；没有 NPZ 时依次尝试 CSV、PKL，不递归子目录。
+当前默认选中 `data/roban/dance1_subject1.npz`：
 
 ```powershell
 uv run python -m project_mujoco_visualizer
 ```
+
+`data/roban/dance1_subject1.csv` 带有 `#` 元数据前缀和另一套列名，当前 CSV
+加载器尚不支持该格式；播放此动作请使用同目录的 NPZ 或 PKL。
+上面的 CSV 示例使用已兼容的 LAFAN 导出文件。
 
 不打开窗口但完整执行 CSV 分析、模型映射和所有帧的 qpos 构造：
 
@@ -39,10 +69,11 @@ uv run python -m project_mujoco_visualizer --analyze-only
 
 ### LAFAN/Roban NPZ
 
-The retargeted LAFAN batch uses the GMR-style NPZ format:
+GMR-style NPZ files such as `data/roban/dance1_subject1.npz` use the following format.
+Other NPZ exports can use the UMR / MuJoCo qpos schema described below:
 
 ```text
-fps: scalar or one-element array (50 Hz)
+fps: scalar or one-element array (30 Hz in dance1_subject1.npz)
 root_pos: (T, 3)
 root_rot: (T, 4), input order xyzw
 dof_pos: (T, 21)
@@ -55,7 +86,7 @@ Play one NPZ file directly:
 ```powershell
 uv run python -m project_mujoco_visualizer `
   --model robot_asset/roban_s22_handball/xml/scene.xml `
-  --motion "data/LAFAN/lafan_s22_npz/walk1_subject1.npz"
+  --motion "data/roban/dance1_subject1.npz"
 ```
 
 The loader converts NPZ `root_rot` from `xyzw` to MuJoCo `wxyz`, generates timestamps from `fps`, and maps `dof_pos` by `joint_names`. The `local_body_pos` and `local_body_rot` arrays are validated when present but are not needed to construct MuJoCo qpos.
@@ -65,13 +96,34 @@ Whole-body-tracking NPZ files are also accepted when they contain `joint_pos`,
 `body_quat_w` is interpreted as `wxyz`. Roban S22 OminiSoma files without a
 `joint_names` field use the canonical 21-joint order for this asset.
 
+### UMR / MuJoCo qpos NPZ
+
+UMR archives containing `qpos (T, 7+J)`, `robot_joint_names (J,)`, and `fps`
+are supported directly. The first seven qpos columns are root position `xyz`
+and root quaternion `wxyz`; the remaining columns follow `robot_joint_names`.
+Joints are mapped to the selected XML by name. This schema requires one free
+root followed by scalar joints; other qpos layouts are not supported.
+Unicode, byte-string, and legacy object arrays of joint names are accepted.
+Object names are decoded with restricted NumPy pickle globals; other archive
+fields retain `allow_pickle=False`. The recorded `robot_xml` path is metadata
+and is not loaded, so use `--model` to select your local model.
+Timing comes from `fps`; `frame_ids` are metadata, not timestamps.
+
+```powershell
+uv run python -m project_mujoco_visualizer `
+  --model robot_asset/roban_s22_handball/xml/scene.xml `
+  --motion "data/roban/UMR/roban_s22_LAFAN_UMR/aiming1_subject1_roban_s22.npz"
+```
+
 如果 CSV 没有时间列，必须显式提供采样率，例如
 `--sample-rate 25`。编号四元数列（`root_quat_0..3`）必须显式指定
 `--quat-order wxyz` 或 `--quat-order xyzw`。
 
 ## 当前数据格式分析
 
-仓库中的 6 个 CSV 实际上都是 100 帧、29 列、25 Hz（时间间隔 0.04 s）：
+当前示例 `data/roban/LAFAN/lafan_s22_csv/aiming1_subject1_roban_s22.csv`
+为 7184 帧、29 列、30 Hz（时间间隔约 0.0333333 s），包含以下字段。
+不同数据集的帧数、采样率和列序可能不同，以实际加载报告为准：
 
 ```text
 timestamp
@@ -131,8 +183,8 @@ MuJoCo 原生 `Ctrl+Q` 也可以退出。终端中按 `Ctrl+C` 时程序会捕�
 uv run python -m unittest discover -s tests -v
 ```
 
-测试覆盖 CSV 读取与采样率识别、重复/缺失字段错误、基于 joint name 的映射和自由根 qpos 构造。原始 `data/*.csv` 与 `robot_asset` 文件不会被程序改写。
+测试覆盖 CSV 读取与采样率识别、重复/缺失字段错误、基于 joint name 的映射和自由根 qpos 构造。`test_repository_data.py` 使用上述 Roban CSV 和 `data/roban/dance1_subject1.npz`，需要本地数据。原始 `data/roban/` 与 `robot_asset` 文件不会被可视化程序改写。
 
 如果本机的 uv 缓存目录权限异常，可临时使用 `uv run --no-cache ...`；这只绕过 uv 缓存，不改变项目环境或输入文件。
 
-上下方向键在当前 `--motion` 文件所在目录内切换动作（省略 `--motion` 时使用自动选中文件的目录）。启动时扫描同层 CSV/NPZ 文件，按文件名排序（忽略大小写），首尾循环，不递归子目录。切换从第一帧开始，保留播放/暂停、倍速和循环设置；终端显示当前文件路径。加载失败会显示错误并保留当前动作。
+上下方向键在当前 `--motion` 文件所在目录内切换动作（省略 `--motion` 时使用自动选中文件的目录）。启动时扫描同层 CSV/NPZ/PKL 文件，按文件名排序（忽略大小写），首尾循环，不递归子目录。切换从第一帧开始，保留播放/暂停、倍速和循环设置；终端显示当前文件路径。加载失败会显示错误并保留当前动作。

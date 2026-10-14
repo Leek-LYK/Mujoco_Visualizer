@@ -26,9 +26,9 @@ def _select_motion(path: str | None, data_dir: str | Path) -> Path:
             raise VisualizerError(f"Motion file does not exist: {requested}")
         return requested
     directory = Path(data_dir).expanduser().resolve()
-    candidates = tuple(sorted(directory.glob("*.csv")))
+    candidates = tuple(sorted(directory.glob("*.npz")))
     if not candidates:
-        candidates = tuple(sorted(directory.glob("*.npz")))
+        candidates = tuple(sorted(directory.glob("*.csv")))
     if not candidates:
         candidates = tuple(sorted(directory.glob("*.pkl")))
     if not candidates:
@@ -61,8 +61,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--data-dir",
         type=Path,
-        default=Path("data"),
-        help="Directory scanned for CSV/NPZ/PKL when --motion is omitted.",
+        default=Path("data") / "roban",
+        help="Motion directory (default: data/roban); scan NPZ, then CSV, then PKL when --motion is omitted.",
     )
     parser.add_argument(
         "--sample-rate",
